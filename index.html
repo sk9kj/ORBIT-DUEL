@@ -157,6 +157,7 @@ label{display:flex;gap:10px;align-items:center}
     <h2>Paramètres</h2>
     <label><input type="checkbox" id="snd" style="flex:none"> Sons activés</label>
     <label>Volume <input type="range" id="vol" min="0" max="100" style="flex:1"></label>
+    <label><input type="checkbox" id="fxLow" style="flex:none"> Effets réduits (plus fluide)</label>
     <button id="logout" class="danger full">Se déconnecter</button>
     <button class="ghost" data-go="menu">← Retour</button>
   </div>
@@ -202,7 +203,7 @@ const VIEW = 540, R = 22, TYPES = [['color', 'Couleur'], ['shape', 'Forme'], ['t
 let ws, token = localStorage.getItem('od_token'), me = null, catalog = [], shopType = 'color';
 let friends = { friends: [], requests: [] }, match = null, state = null, rend = [], trails = [[], []], parts = [];
 let shake = 0, lastBanner = null, lastCd = null, mouse = null, inviteFrom = null, loggedIn = false, last = performance.now();
-let soundOn = localStorage.getItem('od_snd') !== '0', vol = (+localStorage.getItem('od_vol') || 60) / 100;
+let soundOn = true, vol = 0.6, lowFx = false;
 let authMode = 'login';
 const cv = $('#cv'), g = cv.getContext('2d');
 const scale = () => Math.min(innerWidth, innerHeight) / (2 * VIEW);
@@ -319,8 +320,13 @@ function onMsg(m) {
 }
 
 // ---------- Menus ----------
+function applySettings(s) {
+  soundOn = !!s.sound; vol = (s.volume ?? 60) / 100; lowFx = s.effects === 'reduced';
+  $('#snd').checked = soundOn; $('#vol').value = Math.round(vol * 100); $('#fxLow').checked = lowFx;
+}
 function renderMe() {
   if (!me) return;
+  if (me.settings) applySettings(me.settings);
   $('#who').textContent = `${me.name} · ${me.rank} · ${me.elo} ELO`;
   $('#profile').textContent = `Victoires ${me.wins} · Défaites ${me.losses} · Nuls ${me.draws} · ${me.coins} pièces`;
   renderShop();
@@ -352,8 +358,11 @@ $('#addBtn').onclick = () => {
 $('#qCancel').onclick = () => send({ type: 'cancelQueue' });
 $('#invYes').onclick = () => { send({ type: 'inviteResponse', from: inviteFrom, accept: true }); $('#inviteModal').classList.add('hidden'); };
 $('#invNo').onclick = () => { send({ type: 'inviteResponse', from: inviteFrom, accept: false }); $('#inviteModal').classList.add('hidden'); };
-$('#snd').onchange = e => { soundOn = e.target.checked; localStorage.setItem('od_snd', soundOn ? '1' : '0'); };
-$('#vol').oninput = e => { vol = e.target.value / 100; localStorage.setItem('od_vol', e.target.value); };
+const pushSettings = () => send({ type: 'settings', sound: $('#snd').checked, volume: +$('#vol').value, effects: $('#fxLow').checked ? 'reduced' : 'full' });
+$('#snd').onchange = () => { soundOn = $('#snd').checked; pushSettings(); };
+$('#vol').oninput = e => { vol = e.target.value / 100; };
+$('#vol').onchange = pushSettings;
+$('#fxLow').onchange = pushSettings;
 $('#logout').onclick = () => {
   send({ type: 'logout' });
   localStorage.removeItem('od_token');
@@ -385,10 +394,39 @@ function renderShop() {
   $('#shopGrid').innerHTML = catalog.filter(i => i.type === shopType).map(i => {
     const eq = me.equipped[i.type] === i.id, own = me.owned.includes(i.id);
     const label = eq ? 'Équipé' : own ? 'Équiper' : `Acheter ${i.price} 🪙`;
-    const sw = i.type === 'color' ? `<div class="swatch" style="background:${i.value}"></div>` : '';
-    return `<div class="item ${eq ? 'eq' : ''}">${sw}<b>${esc(i.name)}</b><button class="small" data-buy="${i.id}" ${eq ? 'disabled' : ''}>${label}</button></div>`;
+    return `<div class="item ${eq ? 'eq' : ''}"><canvas class="ip" data-id="${i.id}" width="120" height="70" style="width:100%;border-radius:8px;background:#070b1a"></canvas><b>${esc(i.name)}</b><button class="small" data-buy="${i.id}" ${eq ? 'disabled' : ''}>${label}</button></div>`;
   }).join('');
+  drawItemPreviews();
   drawPreview();
+}
+function drawItemPreviews() {
+  document.querySelectorAll('canvas.ip').forEach(el => {
+    const c = el.getContext('2d'), it = catalog.find(i => i.id === el.dataset.id);
+    if (!it || !me) return;
+    c.clearRect(0, 0, 120, 70);
+    const look = { ...lookOf(me), [it.type]: it.value };
+    if (it.type === 'trail') {
+      const pts = [];
+      for (let k = 0; k < 14; k++) pts.push({ x: 15 + k * 7, y: 35 + Math.sin(k / 3) * 6 });
+      pts.forEach((p, k) => {
+        if (!k) return;
+        const a = pts[k - 1], f = k / pts.length;
+        c.globalAlpha = f * .6; c.lineCap = 'round';
+        c.strokeStyle = it.value === 'rainbow' ? `hsl(${k * 25},90%,60%)` : (look.color || '#22d3ee');
+        c.lineWidth = it.value === 'comet' ? f * 20 : f * 5;
+        c.beginPath(); c.moveTo(a.x, a.y); c.lineTo(p.x, p.y); c.stroke();
+      });
+      c.globalAlpha = 1;
+      drawCursor(c, 106, 35, 12, look, performance.now());
+    } else if (it.type === 'particle') {
+      const col = it.value === 'fire' ? '#f97316' : '#7dd3fc';
+      for (let k = 0; k < 8; k++) { c.globalAlpha = .3 + k / 16; c.fillStyle = col; c.beginPath(); c.arc(30 + k * 9, 60 - (k * 7) % 40, 2 + (k % 3), 0, Math.PI * 2); c.fill(); }
+      c.globalAlpha = 1;
+      drawCursor(c, 60, 35, 16, look, performance.now());
+    } else {
+      drawCursor(c, 60, 35, 22, look, performance.now());
+    }
+  });
 }
 function drawPreview() {
   if (!me || !catalog.length) return;
@@ -464,6 +502,7 @@ const setMouse = e => { mouse = { x: (e.clientX - innerWidth / 2) / scale(), y: 
 cv.addEventListener('pointermove', setMouse);
 cv.addEventListener('pointerdown', setMouse);
 setInterval(() => { if (match && state && mouse && !match.over) send({ type: 'input', x: mouse.x, y: mouse.y }); }, 33);
+setInterval(() => { if ($('#shop').classList.contains('active')) drawPreview(); }, 50);
 
 // ---------- Rendu ----------
 function drawCursor(c, x, y, r, look, t) {
@@ -507,9 +546,10 @@ function drawTrail(T, type, col) {
 function frame(now) {
   requestAnimationFrame(frame);
   const dt = Math.min(0.05, (now - last) / 1000); last = now;
-  if (!match || !state) return;
+  if (!match) return;
   const W = innerWidth, H = innerHeight, d = devicePixelRatio || 1, s = scale();
   if (cv.width !== W * d || cv.height !== H * d) { cv.width = W * d; cv.height = H * d; }
+  if (!state) { g.setTransform(d, 0, 0, d, 0, 0); g.fillStyle = '#070b1a'; g.fillRect(0, 0, W, H); return; }
   shake = Math.max(0, shake - dt * 40);
   const sx = (Math.random() - .5) * shake, sy = (Math.random() - .5) * shake;
 
@@ -551,7 +591,7 @@ function frame(now) {
   }
 
   parts.forEach(p => { p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt; });
-  parts = parts.filter(p => p.life > 0).slice(-500);
+  parts = parts.filter(p => p.life > 0).slice(-(lowFx ? 120 : 500));
   parts.forEach(p => {
     g.globalAlpha = Math.max(0, p.life / p.max); g.fillStyle = p.col;
     g.beginPath(); g.arc(p.x, p.y, p.size, 0, Math.PI * 2); g.fill();

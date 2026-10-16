@@ -42,6 +42,7 @@ const CATALOG = [
 ];
 const DEFAULT_OWNED = CATALOG.filter(i => i.price === 0).map(i => i.id);
 const DEFAULT_EQUIP = { color: 'c_cyan', shape: 's_circle', trail: 't_none', particle: 'p_none', fx: 'f_none' };
+const DEFAULT_SETTINGS = { sound: true, volume: 60, effects: 'full' };
 
 // ---------- Base de données (fichier JSON) ----------
 let db = { users: {} };
@@ -66,7 +67,7 @@ let invites = [];            // { from, to }
 // ---------- Utilitaires ----------
 const getUser = n => (typeof n === 'string' ? db.users[n.toLowerCase()] : undefined);
 const rankOf = elo => elo < 1100 ? 'Bronze' : elo < 1300 ? 'Argent' : elo < 1500 ? 'Or' : elo < 1700 ? 'Platine' : elo < 1900 ? 'Diamant' : 'Maître';
-const profile = u => ({ name: u.name, elo: u.elo, rank: rankOf(u.elo), wins: u.wins, losses: u.losses, draws: u.draws, coins: u.coins, owned: u.owned, equipped: u.equipped });
+const profile = u => ({ name: u.name, elo: u.elo, rank: rankOf(u.elo), wins: u.wins, losses: u.losses, draws: u.draws, coins: u.coins, owned: u.owned, equipped: u.equipped, settings: { ...DEFAULT_SETTINGS, ...(u.settings || {}) } });
 const lookOf = u => Object.fromEntries(Object.entries(u.equipped).map(([k, id]) => [k, CATALOG.find(i => i.id === id)?.value ?? null]));
 const send = (ws, msg) => { if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg)); };
 const err = (ws, msg) => send(ws, { type: 'notice', msg, error: true });
@@ -86,7 +87,7 @@ function register(username, password) {
   if (typeof password !== 'string' || password.length < 6 || password.length > 128) return { status: 400, error: 'Mot de passe : 6 caractères minimum.' };
   if (getUser(username)) return { status: 409, error: 'Ce pseudo est déjà pris.' };
   const salt = crypto.randomBytes(16).toString('hex');
-  const u = { name: username, salt, hash: hashPw(password, salt), elo: 1000, wins: 0, losses: 0, draws: 0, coins: START_COINS, owned: [...DEFAULT_OWNED], equipped: { ...DEFAULT_EQUIP }, friends: [], requests: [], created: Date.now() };
+  const u = { name: username, salt, hash: hashPw(password, salt), elo: 1000, wins: 0, losses: 0, draws: 0, coins: START_COINS, owned: [...DEFAULT_OWNED], equipped: { ...DEFAULT_EQUIP }, friends: [], requests: [], settings: { ...DEFAULT_SETTINGS }, created: Date.now() };
   db.users[username.toLowerCase()] = u;
   save();
   return issue(u);
@@ -284,6 +285,16 @@ function onMessage(ws, m) {
         me.coins -= it.price; me.owned.push(it.id);
       }
       me.equipped[it.type] = it.id; save();
+      return send(ws, { type: 'profile', user: profile(me) });
+    }
+
+    // --- Réglages propres au compte (sauvegardés côté serveur) ---
+    case 'settings': {
+      if (!me.settings) me.settings = { ...DEFAULT_SETTINGS };
+      if (typeof m.sound === 'boolean') me.settings.sound = m.sound;
+      if (Number.isFinite(m.volume)) me.settings.volume = clamp(Math.round(m.volume), 0, 100);
+      if (m.effects === 'full' || m.effects === 'reduced') me.settings.effects = m.effects;
+      save();
       return send(ws, { type: 'profile', user: profile(me) });
     }
 
